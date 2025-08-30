@@ -164,6 +164,50 @@ export class AriWebSocketTrigger implements INodeType {
                 description: 'Select specific event types to process. Leave empty to process all events.',
             },
             {
+                displayName: 'Agent Pickup Detection',
+                name: 'agentPickupDetection',
+                type: 'boolean',
+                default: false,
+                description: 'Enable specialized filtering for agent pickup events',
+            },
+            {
+                displayName: 'Agent Pickup Variables',
+                name: 'agentPickupVariables',
+                type: 'multiOptions',
+                displayOptions: {
+                    show: {
+                        agentPickupDetection: [true],
+                    },
+                },
+                options: [
+                    { name: 'BRIDGEPEER', value: 'BRIDGEPEER', description: 'Agent extension that picked up the call' },
+                    { name: 'SCD_CONNECT_AGENT', value: 'SCD_CONNECT_AGENT', description: 'Agent number confirmation' },
+                    { name: 'QUEUE_CALLERID', value: 'QUEUE_CALLERID', description: 'Caller ID in queue context' },
+                    { name: 'QUEUE_NAME', value: 'QUEUE_NAME', description: 'Queue name where call was answered' },
+                    { name: 'AGENT_NAME', value: 'AGENT_NAME', description: 'Name of the agent who picked up' },
+                ],
+                default: ['BRIDGEPEER', 'SCD_CONNECT_AGENT'],
+                description: 'Select which agent pickup variables to monitor',
+            },
+            {
+                displayName: 'Channel State Filter',
+                name: 'channelStateFilter',
+                type: 'options',
+                displayOptions: {
+                    show: {
+                        agentPickupDetection: [true],
+                    },
+                },
+                options: [
+                    { name: 'Any State', value: 'any' },
+                    { name: 'Up (Answered)', value: 'Up' },
+                    { name: 'Ringing', value: 'Ringing' },
+                    { name: 'Down (Hung Up)', value: 'Down' },
+                ],
+                default: 'Up',
+                description: 'Filter by channel state for agent pickup events',
+            },
+            {
                 displayName: 'Extra Query (optional)',
                 name: 'extraQuery',
                 type: 'string',
@@ -203,6 +247,9 @@ export class AriWebSocketTrigger implements INodeType {
         const subscribeAll = this.getNodeParameter('subscribeAll', 0) as boolean;
         const eventTypeFiltering = this.getNodeParameter('eventTypeFiltering', 0) as boolean;
         const eventTypes = this.getNodeParameter('eventTypes', 0) as string[];
+        const agentPickupDetection = this.getNodeParameter('agentPickupDetection', 0) as boolean;
+        const agentPickupVariables = this.getNodeParameter('agentPickupVariables', 0) as string[];
+        const channelStateFilter = this.getNodeParameter('channelStateFilter', 0) as string;
         const extraQuery = (this.getNodeParameter('extraQuery', 0) as string || '').trim();
         const heartbeatMs = this.getNodeParameter('heartbeatMs', 0) as number;
         const emitConnectionEvents = this.getNodeParameter('emitConnectionEvents', 0) as boolean;
@@ -305,6 +352,61 @@ export class AriWebSocketTrigger implements INodeType {
                         return;
                     }
                     log(`Processing message #${messageCount} - event type '${eventType}' matches filter`);
+                }
+
+                // Agent pickup detection logic
+                if (agentPickupDetection) {
+                    const eventType = normalized.type as string;
+                    const channelState = (normalized.raw as any)?.channel?.state as string;
+                    const variable = (normalized.raw as any)?.variable as string;
+                    const value = (normalized.raw as any)?.value as string;
+
+                    // Check if this is a ChannelVarset event with agent pickup variables
+                    if (eventType === 'ChannelVarset' && variable && agentPickupVariables.includes(variable)) {
+                        log(`Agent pickup variable detected: ${variable} = ${value}`, {
+                            channelState,
+                            channelId: normalized.channelId,
+                            agentNumber: value
+                        });
+
+                        // Add agent pickup specific fields to the output
+                        normalized.agentPickupEvent = true;
+                        normalized.agentPickupVariable = variable;
+                        normalized.agentPickupValue = value;
+                        normalized.agentNumber = value;
+                        normalized.channelState = channelState;
+
+                        // Add additional context for agent pickup
+                        if (variable === 'BRIDGEPEER') {
+                            normalized.agentExtension = value;
+                        } else if (variable === 'SCD_CONNECT_AGENT') {
+                            normalized.agentId = value;
+                        }
+                    }
+
+                    // Channel state filtering for agent pickup events
+                    if (channelStateFilter !== 'any' && channelState && channelState !== channelStateFilter) {
+                        log(`Skipping message #${messageCount} - channel state '${channelState}' doesn't match filter '${channelStateFilter}'`);
+                        return;
+                    }
+
+                    // Only emit if we have agent pickup variables or if it's a relevant state change
+                    const hasAgentPickupVariable = eventType === 'ChannelVarset' && variable && agentPickupVariables.includes(variable);
+                    const isRelevantStateChange = eventType === 'ChannelStateChange' && channelState === channelStateFilter;
+                    const isOtherRelevantEvent = ['ChannelEnteredBridge', 'ChannelLeftBridge'].includes(eventType);
+
+                    if (!hasAgentPickupVariable && !isRelevantStateChange && !isOtherRelevantEvent) {
+                        log(`Skipping message #${messageCount} - not a relevant agent pickup event`);
+                        return;
+                    }
+
+                    log(`Processing agent pickup event #${messageCount}`, {
+                        type: eventType,
+                        variable,
+                        value,
+                        channelState,
+                        channelId: normalized.channelId
+                    });
                 }
 
                 log(`Emitting message #${messageCount}`, { type: normalized.type, channelId: normalized.channelId });
