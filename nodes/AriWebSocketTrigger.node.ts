@@ -70,6 +70,100 @@ export class AriWebSocketTrigger implements INodeType {
                 default: true,
             },
             {
+                displayName: 'Event Type Filtering',
+                name: 'eventTypeFiltering',
+                type: 'boolean',
+                default: false,
+                description: 'Enable filtering by specific event types',
+            },
+            {
+                displayName: 'Event Types',
+                name: 'eventTypes',
+                type: 'multiOptions',
+                displayOptions: {
+                    show: {
+                        eventTypeFiltering: [true],
+                    },
+                },
+                options: [
+                    // Channel Events
+                    { name: 'ChannelCreated', value: 'ChannelCreated' },
+                    { name: 'ChannelDestroyed', value: 'ChannelDestroyed' },
+                    { name: 'ChannelDtmfBegin', value: 'ChannelDtmfBegin' },
+                    { name: 'ChannelDtmfEnd', value: 'ChannelDtmfEnd' },
+                    { name: 'ChannelDtmfReceived', value: 'ChannelDtmfReceived' },
+                    { name: 'ChannelEnteredBridge', value: 'ChannelEnteredBridge' },
+                    { name: 'ChannelLeftBridge', value: 'ChannelLeftBridge' },
+                    { name: 'ChannelStateChange', value: 'ChannelStateChange' },
+                    { name: 'ChannelUserevent', value: 'ChannelUserevent' },
+                    { name: 'ChannelVarset', value: 'ChannelVarset' },
+                    { name: 'ChannelCallerId', value: 'ChannelCallerId' },
+                    { name: 'ChannelConnectedLine', value: 'ChannelConnectedLine' },
+                    { name: 'ChannelDialplan', value: 'ChannelDialplan' },
+                    { name: 'ChannelHold', value: 'ChannelHold' },
+                    { name: 'ChannelUnhold', value: 'ChannelUnhold' },
+                    { name: 'ChannelTalkingStarted', value: 'ChannelTalkingStarted' },
+                    { name: 'ChannelTalkingFinished', value: 'ChannelTalkingFinished' },
+                    { name: 'ChannelHangupRequest', value: 'ChannelHangupRequest' },
+
+                    // Bridge Events
+                    { name: 'BridgeCreated', value: 'BridgeCreated' },
+                    { name: 'BridgeDestroyed', value: 'BridgeDestroyed' },
+                    { name: 'BridgeMerged', value: 'BridgeMerged' },
+                    { name: 'BridgeAttendedTransfer', value: 'BridgeAttendedTransfer' },
+                    { name: 'BridgeBlindTransfer', value: 'BridgeBlindTransfer' },
+                    { name: 'BridgeVideoSourceChanged', value: 'BridgeVideoSourceChanged' },
+
+                    // Dial Events
+                    { name: 'Dial', value: 'Dial' },
+                    { name: 'DialBegin', value: 'DialBegin' },
+                    { name: 'DialEnd', value: 'DialEnd' },
+
+                    // Playback Events
+                    { name: 'PlaybackStarted', value: 'PlaybackStarted' },
+                    { name: 'PlaybackStopped', value: 'PlaybackStopped' },
+                    { name: 'PlaybackContinuing', value: 'PlaybackContinuing' },
+
+                    // Recording Events
+                    { name: 'RecordingStarted', value: 'RecordingStarted' },
+                    { name: 'RecordingStopped', value: 'RecordingStopped' },
+                    { name: 'RecordingFinished', value: 'RecordingFinished' },
+                    { name: 'RecordingFailed', value: 'RecordingFailed' },
+
+                    // Stasis Events
+                    { name: 'StasisStart', value: 'StasisStart' },
+                    { name: 'StasisEnd', value: 'StasisEnd' },
+
+                    // Device and Endpoint Events
+                    { name: 'DeviceStateChanged', value: 'DeviceStateChanged' },
+                    { name: 'EndpointStateChange', value: 'EndpointStateChange' },
+                    { name: 'ExtensionStatusChanged', value: 'ExtensionStatusChanged' },
+
+                    // Contact and Peer Events
+                    { name: 'ContactInfo', value: 'ContactInfo' },
+                    { name: 'ContactStatusChange', value: 'ContactStatusChange' },
+                    { name: 'Peer', value: 'Peer' },
+                    { name: 'PeerStatusChange', value: 'PeerStatusChange' },
+
+                    // Application Events
+                    { name: 'ApplicationReplaced', value: 'ApplicationReplaced' },
+                    { name: 'ApplicationMove', value: 'ApplicationMove' },
+                    { name: 'ApplicationMoveFailed', value: 'ApplicationMoveFailed' },
+
+                    // Message Events
+                    { name: 'MessageReceived', value: 'MessageReceived' },
+                    { name: 'TextMessageReceived', value: 'TextMessageReceived' },
+
+                    // Other Events
+                    { name: 'HangupRequest', value: 'HangupRequest' },
+                    { name: 'Hold', value: 'Hold' },
+                    { name: 'Unhold', value: 'Unhold' },
+                    { name: 'MissingParams', value: 'MissingParams' },
+                ],
+                default: [],
+                description: 'Select specific event types to process. Leave empty to process all events.',
+            },
+            {
                 displayName: 'Extra Query (optional)',
                 name: 'extraQuery',
                 type: 'string',
@@ -107,6 +201,8 @@ export class AriWebSocketTrigger implements INodeType {
         const username = this.getNodeParameter('username', 0) as string;
         const password = this.getNodeParameter('password', 0) as string;
         const subscribeAll = this.getNodeParameter('subscribeAll', 0) as boolean;
+        const eventTypeFiltering = this.getNodeParameter('eventTypeFiltering', 0) as boolean;
+        const eventTypes = this.getNodeParameter('eventTypes', 0) as string[];
         const extraQuery = (this.getNodeParameter('extraQuery', 0) as string || '').trim();
         const heartbeatMs = this.getNodeParameter('heartbeatMs', 0) as number;
         const emitConnectionEvents = this.getNodeParameter('emitConnectionEvents', 0) as boolean;
@@ -199,6 +295,16 @@ export class AriWebSocketTrigger implements INodeType {
                         raw: payload,
                         receivedAt: new Date().toISOString(),
                     } as any;
+                }
+
+                // Event type filtering logic
+                if (eventTypeFiltering && eventTypes.length > 0) {
+                    const eventType = normalized.type as string;
+                    if (!eventType || !eventTypes.includes(eventType)) {
+                        log(`Skipping message #${messageCount} - event type '${eventType}' not in selected types: [${eventTypes.join(', ')}]`);
+                        return;
+                    }
+                    log(`Processing message #${messageCount} - event type '${eventType}' matches filter`);
                 }
 
                 log(`Emitting message #${messageCount}`, { type: normalized.type, channelId: normalized.channelId });
