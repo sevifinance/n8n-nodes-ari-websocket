@@ -89,6 +89,13 @@ export class AriWebSocketTrigger implements INodeType {
                 default: false,
                 description: 'If enabled, emit items for open/close/error in addition to messages',
             },
+            {
+                displayName: 'Debug Mode',
+                name: 'debugMode',
+                type: 'boolean',
+                default: true,
+                description: 'Enable debug logging to help with testing',
+            },
         ],
     };
 
@@ -103,6 +110,7 @@ export class AriWebSocketTrigger implements INodeType {
         const extraQuery = (this.getNodeParameter('extraQuery', 0) as string || '').trim();
         const heartbeatMs = this.getNodeParameter('heartbeatMs', 0) as number;
         const emitConnectionEvents = this.getNodeParameter('emitConnectionEvents', 0) as boolean;
+        const debugMode = this.getNodeParameter('debugMode', 0) as boolean;
 
         const qs = new URLSearchParams();
         qs.set('api_key', `${username}:${password}`);
@@ -115,32 +123,64 @@ export class AriWebSocketTrigger implements INodeType {
         let ws: WebSocket | undefined;
         let heartbeatTimer: NodeJS.Timeout | undefined;
         let backoff = 1000;
+        let messageCount = 0;
+        let isConnected = false;
+
+        const log = (message: string, data?: any) => {
+            if (debugMode) {
+                console.log(`[ARI WebSocket Trigger] ${message}`, data || '');
+            }
+        };
 
         const connect = () => {
+            log(`Connecting to ${url}`);
             ws = new WebSocket(url);
 
             ws.on('open', () => {
+                isConnected = true;
                 backoff = 1000;
+                log('WebSocket connection opened successfully');
+
                 if (heartbeatTimer) clearInterval(heartbeatTimer);
                 heartbeatTimer = setInterval(() => {
                     if (ws && ws.readyState === WebSocket.OPEN) {
-                        try { ws.ping(); } catch { }
+                        try {
+                            ws.ping();
+                            log('Heartbeat ping sent');
+                        } catch (error) {
+                            log('Heartbeat ping failed', error);
+                        }
                     }
                 }, heartbeatMs);
+
                 if (emitConnectionEvents) {
-                    this.emit([this.helpers.returnJsonArray([{ event: 'open', ws: true }])]);
+                    this.emit([this.helpers.returnJsonArray([{
+                        event: 'open',
+                        ws: true,
+                        timestamp: new Date().toISOString(),
+                        messageCount
+                    }])]);
                 }
             });
 
             ws.on('message', (buf: WebSocket.RawData) => {
+                messageCount++;
                 const text = buf.toString();
+                log(`Received message #${messageCount}`, { length: text.length, preview: text.substring(0, 100) });
+
                 let payload: unknown = text;
-                try { payload = JSON.parse(text); } catch { }
+                try {
+                    payload = JSON.parse(text);
+                    log(`Message #${messageCount} parsed as JSON successfully`);
+                } catch (error) {
+                    log(`Message #${messageCount} is not valid JSON, treating as raw text`);
+                }
 
                 let normalized: Record<string, unknown> = {};
                 if (typeof payload === 'object' && payload !== null) {
                     const p = payload as Record<string, unknown>;
                     normalized = {
+                        messageNumber: messageCount,
                         type: p.type,
                         timestamp: p.timestamp,
                         application: p.application,
@@ -151,27 +191,60 @@ export class AriWebSocketTrigger implements INodeType {
                         connectedNumber: (p as any)?.channel?.connected?.number,
                         dialplan: (p as any)?.channel?.dialplan,
                         raw: p,
+                        receivedAt: new Date().toISOString(),
                     };
                 } else {
-                    normalized = { raw: payload } as any;
+                    normalized = {
+                        messageNumber: messageCount,
+                        raw: payload,
+                        receivedAt: new Date().toISOString(),
+                    } as any;
                 }
 
+                log(`Emitting message #${messageCount}`, { type: normalized.type, channelId: normalized.channelId });
                 this.emit([this.helpers.returnJsonArray([normalized as IDataObject])]);
             });
 
-            ws.on('close', (code: number) => {
+            ws.on('close', (code: number, reason: Buffer) => {
+                isConnected = false;
+                log(`WebSocket connection closed`, { code, reason: reason.toString() });
+
                 if (heartbeatTimer) clearInterval(heartbeatTimer);
                 if (emitConnectionEvents) {
-                    this.emit([this.helpers.returnJsonArray([{ event: 'close', code }])]);
+                    this.emit([this.helpers.returnJsonArray([{
+                        event: 'close',
+                        code,
+                        reason: reason.toString(),
+                        messageCount,
+                        timestamp: new Date().toISOString()
+                    }])]);
                 }
-                setTimeout(connect, Math.min(backoff, 30000));
+
+                // Reconnect with exponential backoff
+                const reconnectDelay = Math.min(backoff, 30000);
+                log(`Reconnecting in ${reconnectDelay}ms`);
+                setTimeout(connect, reconnectDelay);
                 backoff = Math.min(backoff * 2, 30000);
             });
 
             ws.on('error', (err: Error) => {
+                log('WebSocket error occurred', err.message);
                 if (emitConnectionEvents) {
-                    this.emit([this.helpers.returnJsonArray([{ event: 'error', message: err.message }])]);
+                    this.emit([this.helpers.returnJsonArray([{
+                        event: 'error',
+                        message: err.message,
+                        messageCount,
+                        timestamp: new Date().toISOString()
+                    }])]);
                 }
+            });
+
+            ws.on('ping', () => {
+                log('Received ping from server');
+            });
+
+            ws.on('pong', () => {
+                log('Received pong from server');
             });
         };
 
@@ -179,8 +252,13 @@ export class AriWebSocketTrigger implements INodeType {
 
         return {
             closeFunction: async () => {
+                log('Trigger node is being closed');
+                isConnected = false;
                 if (heartbeatTimer) clearInterval(heartbeatTimer);
-                if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.close();
+                    log('WebSocket connection closed by trigger shutdown');
+                }
             },
         };
     }
