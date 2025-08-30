@@ -8,7 +8,7 @@ export class AriWebSocketTrigger implements INodeType {
     description: INodeTypeDescription = {
         displayName: 'ARI WebSocket Trigger',
         name: 'ariWebSocketTrigger',
-        icon: 'file:websocket.svg',
+        icon: 'file:phone.svg',
         group: ['trigger'],
         version: 1,
         description: 'Subscribe to Asterisk ARI events over WebSocket',
