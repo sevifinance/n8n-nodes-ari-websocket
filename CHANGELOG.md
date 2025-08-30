@@ -13,3 +13,8 @@
 ### Changed
 - Auto version bump
 
+## [0.1.4] - 2025-08-30
+
+### Changed
+- Auto version bump
+
