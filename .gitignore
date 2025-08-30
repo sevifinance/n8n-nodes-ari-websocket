@@ -1,3 +1,4 @@
 ./dist
 .env
 .yarn
+/node_modules
