@@ -17,7 +17,7 @@ class AriWebSocketTrigger {
             description: 'Subscribe to Asterisk ARI events over WebSocket',
             defaults: { name: 'ARI WebSocket Trigger' },
             inputs: [],
-            outputs: ['main'],
+            outputs: ["main" /* NodeConnectionType.Main */],
             credentials: [],
             properties: [
                 {

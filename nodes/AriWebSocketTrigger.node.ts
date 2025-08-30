@@ -1,4 +1,5 @@
 import type { ITriggerFunctions, INodeType, INodeTypeDescription, ITriggerResponse, IDataObject } from 'n8n-workflow';
+import { NodeConnectionType } from 'n8n-workflow';
 import WebSocket from 'ws';
 
 export class AriWebSocketTrigger implements INodeType {
@@ -13,7 +14,7 @@ export class AriWebSocketTrigger implements INodeType {
         description: 'Subscribe to Asterisk ARI events over WebSocket',
         defaults: { name: 'ARI WebSocket Trigger' },
         inputs: [],
-        outputs: ['main'],
+        outputs: [NodeConnectionType.Main],
         credentials: [],
         properties: [
             {
